@@ -31,6 +31,54 @@ export const refreshSchema = z.object({
   refreshToken: z.string().min(1, 'Refresh token is required'),
 });
 
+export const createTaskSchema = z.object({
+  title: z
+    .string()
+    .min(1, 'Title is required')
+    .max(200, 'Title must not exceed 200 characters')
+    .trim(),
+  description: z
+    .string()
+    .max(2000, 'Description must not exceed 2000 characters')
+    .trim()
+    .optional()
+    .nullable(),
+  priority: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional().default('MEDIUM'),
+  dueDate: z
+    .string()
+    .datetime({ message: 'Due date must be a valid ISO date' })
+    .optional()
+    .nullable(),
+});
+
+export const updateTaskSchema = z.object({
+  title: z
+    .string()
+    .min(1, 'Title cannot be empty')
+    .max(200, 'Title must not exceed 200 characters')
+    .trim()
+    .optional(),
+  description: z
+    .string()
+    .max(2000, 'Description must not exceed 2000 characters')
+    .trim()
+    .optional()
+    .nullable(),
+  status: z.enum(['PENDING', 'IN_PROGRESS', 'COMPLETED']).optional(),
+  priority: z.enum(['LOW', 'MEDIUM', 'HIGH']).optional(),
+  dueDate: z
+    .string()
+    .datetime({ message: 'Due date must be a valid ISO date' })
+    .optional()
+    .nullable(),
+});
+
+export const taskIdSchema = z.object({
+  id: z.string().uuid('Invalid task ID format'),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
+export type CreateTaskInput = z.infer<typeof createTaskSchema>;
+export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;

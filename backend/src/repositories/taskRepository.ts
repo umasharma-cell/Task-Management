@@ -17,8 +17,8 @@ export class TaskRepository {
       where.status = status;
     }
 
-    if (search) {
-      where.title = { contains: search, mode: 'insensitive' };
+    if (search && search.trim().length > 0) {
+      where.title = { contains: search.trim(), mode: 'insensitive' };
     }
 
     const [tasks, total] = await Promise.all([
@@ -38,34 +38,64 @@ export class TaskRepository {
     return prisma.task.findFirst({ where: { id, userId } });
   }
 
-  async create(data: Prisma.TaskCreateInput): Promise<Task> {
-    return prisma.task.create({ data });
-  }
-
-  async update(id: string, userId: string, data: Prisma.TaskUpdateInput): Promise<Task> {
-    return prisma.task.update({
-      where: { id, userId },
-      data,
+  async create(data: {
+    title: string;
+    description?: string | null;
+    priority?: string;
+    dueDate?: string | null;
+    userId: string;
+  }): Promise<Task> {
+    return prisma.task.create({
+      data: {
+        title: data.title,
+        description: data.description ?? null,
+        priority: (data.priority as Prisma.EnumTaskPriorityFieldUpdateOperationsInput['set']) ?? 'MEDIUM',
+        dueDate: data.dueDate ? new Date(data.dueDate) : null,
+        user: { connect: { id: data.userId } },
+      },
     });
   }
 
-  async delete(id: string, userId: string): Promise<Task> {
-    return prisma.task.delete({ where: { id, userId } });
+  async update(id: string, userId: string, data: Prisma.TaskUpdateInput): Promise<Task | null> {
+    // Use a transaction to handle concurrent updates safely
+    return prisma.$transaction(async (tx) => {
+      const existing = await tx.task.findFirst({ where: { id, userId } });
+      if (!existing) return null;
+
+      return tx.task.update({
+        where: { id },
+        data: {
+          ...data,
+          updatedAt: new Date(),
+        },
+      });
+    });
   }
 
-  async toggleStatus(id: string, userId: string): Promise<Task> {
-    const task = await this.findById(id, userId);
-    if (!task) throw new Error('Task not found');
+  async delete(id: string, userId: string): Promise<Task | null> {
+    return prisma.$transaction(async (tx) => {
+      const existing = await tx.task.findFirst({ where: { id, userId } });
+      if (!existing) return null;
 
-    const nextStatus: Record<TaskStatus, TaskStatus> = {
-      PENDING: 'IN_PROGRESS',
-      IN_PROGRESS: 'COMPLETED',
-      COMPLETED: 'PENDING',
-    };
+      return tx.task.delete({ where: { id } });
+    });
+  }
 
-    return prisma.task.update({
-      where: { id },
-      data: { status: nextStatus[task.status] },
+  async toggleStatus(id: string, userId: string): Promise<Task | null> {
+    return prisma.$transaction(async (tx) => {
+      const task = await tx.task.findFirst({ where: { id, userId } });
+      if (!task) return null;
+
+      const nextStatus: Record<TaskStatus, TaskStatus> = {
+        PENDING: 'IN_PROGRESS',
+        IN_PROGRESS: 'COMPLETED',
+        COMPLETED: 'PENDING',
+      };
+
+      return tx.task.update({
+        where: { id },
+        data: { status: nextStatus[task.status] },
+      });
     });
   }
 }
