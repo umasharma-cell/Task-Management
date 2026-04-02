@@ -4,6 +4,7 @@ import { createContext, useContext, useState, useEffect, useCallback, ReactNode 
 import { useRouter } from 'next/navigation';
 import { User, LoginCredentials, RegisterCredentials } from '@/types';
 import { authApi } from '@/lib/auth-api';
+import { setAccessToken } from '@/lib/api';
 
 interface AuthContextType {
   user: User | null;
@@ -21,25 +22,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const router = useRouter();
 
+  // On mount, try to restore session using refresh token cookie
   useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    const storedUser = localStorage.getItem('user');
-    if (token && storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-      } catch {
-        localStorage.clear();
+    const restoreSession = async () => {
+      const storedUser = localStorage.getItem('user');
+      if (!storedUser) {
+        setIsLoading(false);
+        return;
       }
-    }
-    setIsLoading(false);
+
+      try {
+        // Attempt silent refresh — cookie is sent automatically
+        const response = await authApi.refresh();
+        const { user: userData, accessToken } = response.data!;
+        setAccessToken(accessToken);
+        localStorage.setItem('user', JSON.stringify(userData));
+        setUser(userData);
+      } catch {
+        // Refresh failed — session expired, clear stale data
+        setAccessToken(null);
+        localStorage.removeItem('user');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    restoreSession();
   }, []);
 
   const login = useCallback(async (credentials: LoginCredentials) => {
     const response = await authApi.login(credentials);
-    const { user: userData, accessToken, refreshToken } = response.data!;
+    const { user: userData, accessToken } = response.data!;
 
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    setAccessToken(accessToken);
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
     router.push('/dashboard');
@@ -47,10 +62,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const register = useCallback(async (credentials: RegisterCredentials) => {
     const response = await authApi.register(credentials);
-    const { user: userData, accessToken, refreshToken } = response.data!;
+    const { user: userData, accessToken } = response.data!;
 
-    localStorage.setItem('accessToken', accessToken);
-    localStorage.setItem('refreshToken', refreshToken);
+    setAccessToken(accessToken);
     localStorage.setItem('user', JSON.stringify(userData));
     setUser(userData);
     router.push('/dashboard');
@@ -62,8 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // Even if API call fails, clear local state
     }
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
+    setAccessToken(null);
     localStorage.removeItem('user');
     setUser(null);
     router.push('/auth/login');

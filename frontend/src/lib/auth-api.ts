@@ -4,7 +4,6 @@ import { ApiResponse, User, LoginCredentials, RegisterCredentials } from '@/type
 interface AuthResponse {
   user: User;
   accessToken: string;
-  refreshToken: string;
 }
 
 export const authApi = {
@@ -20,6 +19,11 @@ export const authApi = {
 
   logout: async () => {
     const { data } = await api.post<ApiResponse>('/auth/logout');
+    return data;
+  },
+
+  refresh: async () => {
+    const { data } = await api.post<ApiResponse<AuthResponse>>('/auth/refresh');
     return data;
   },
 };

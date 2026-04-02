@@ -21,7 +21,6 @@ export interface User {
 
 export interface AuthTokens {
   accessToken: string;
-  refreshToken: string;
 }
 
 export interface ApiResponse<T = unknown> {
