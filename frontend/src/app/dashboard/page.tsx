@@ -10,9 +10,12 @@ import { TaskCard } from '@/components/tasks/TaskCard';
 import { Pagination } from '@/components/tasks/Pagination';
 import { TaskFormModal } from '@/components/tasks/TaskFormModal';
 import { DeleteConfirmModal } from '@/components/tasks/DeleteConfirmModal';
+import { DashboardSkeleton, TaskListSkeleton } from '@/components/ui/Skeleton';
+import { ErrorState } from '@/components/ui/ErrorState';
+import { EmptyState } from '@/components/ui/EmptyState';
 import { taskApi } from '@/lib/task-api';
 import { Task, TaskPriority, TaskStatus } from '@/types';
-import { Plus, Loader2, ListTodo } from 'lucide-react';
+import { Plus, ListTodo, SearchX } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const NEXT_STATUS: Record<TaskStatus, TaskStatus> = {
@@ -24,6 +27,8 @@ const NEXT_STATUS: Record<TaskStatus, TaskStatus> = {
 export default function DashboardPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const [hasError, setHasError] = useState(false);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
@@ -45,6 +50,7 @@ export default function DashboardPage() {
 
   const fetchTasks = useCallback(async () => {
     setIsLoading(true);
+    setHasError(false);
     try {
       const params: Record<string, string | number> = { page, limit: 10 };
       if (statusFilter) params.status = statusFilter;
@@ -54,17 +60,20 @@ export default function DashboardPage() {
       setTasks(response.data || []);
       if (response.meta) setMeta(response.meta);
     } catch {
-      toast.error('Failed to load tasks');
+      setHasError(true);
+      if (!isInitialLoad) {
+        toast.error('Failed to load tasks. Check your connection and try again.');
+      }
     } finally {
       setIsLoading(false);
+      setIsInitialLoad(false);
     }
-  }, [page, statusFilter, debouncedSearch]);
+  }, [page, statusFilter, debouncedSearch, isInitialLoad]);
 
   useEffect(() => {
     fetchTasks();
   }, [fetchTasks]);
 
-  // Optimistic toggle with rollback
   const handleToggleStatus = async (taskId: string) => {
     const task = tasks.find((t) => t.id === taskId);
     if (!task || togglingIds.has(taskId)) return;
@@ -72,7 +81,6 @@ export default function DashboardPage() {
     const previousStatus = task.status;
     const optimisticStatus = NEXT_STATUS[previousStatus];
 
-    // Optimistic update
     setTogglingIds((prev) => new Set(prev).add(taskId));
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, status: optimisticStatus } : t))
@@ -83,7 +91,6 @@ export default function DashboardPage() {
       setTasks((prev) => prev.map((t) => (t.id === taskId ? response.data! : t)));
       toast.success(`Moved to ${NEXT_STATUS[previousStatus].replace('_', ' ').toLowerCase()}`);
     } catch {
-      // Rollback
       setTasks((prev) =>
         prev.map((t) => (t.id === taskId ? { ...t, status: previousStatus } : t))
       );
@@ -165,120 +172,139 @@ export default function DashboardPage() {
     setShowCreateModal(true);
   };
 
+  const hasActiveFilters = !!(debouncedSearch || statusFilter);
+
   return (
     <AuthGuard>
       <div className="min-h-screen bg-surface-50">
         <Navbar />
 
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          {/* Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-            <div>
-              <h1 className="text-2xl font-bold text-surface-900">My Tasks</h1>
-              <p className="text-surface-500 text-sm mt-1">
-                Organize and track your work
-              </p>
-            </div>
-            <button onClick={openCreate} className="btn-primary flex items-center gap-2">
-              <Plus className="h-4 w-4" />
-              New Task
-            </button>
-          </div>
-
-          {/* Status summary cards */}
-          <div className="mb-8">
-            <StatusSummary
-              tasks={tasks}
-              total={meta.total}
-              activeFilter={statusFilter}
-              onFilterChange={handleFilterChange}
-            />
-          </div>
-
-          {/* Search & Filter */}
-          <div className="flex flex-col sm:flex-row gap-3 mb-6">
-            <SearchBar value={search} onChange={setSearch} />
-            <FilterDropdown value={statusFilter} onChange={handleFilterChange} />
-          </div>
-
-          {/* Active filter pills */}
-          {(debouncedSearch || statusFilter) && (
-            <div className="flex items-center gap-2 mb-4 flex-wrap">
-              <span className="text-xs text-surface-500">Active filters:</span>
-              {debouncedSearch && (
-                <span className="inline-flex items-center gap-1 text-xs bg-brand-50 text-brand-700 px-2.5 py-1 rounded-full">
-                  Search: &quot;{debouncedSearch}&quot;
-                  <button onClick={() => setSearch('')} className="hover:text-brand-900 ml-0.5">&times;</button>
-                </span>
-              )}
-              {statusFilter && (
-                <span className="inline-flex items-center gap-1 text-xs bg-brand-50 text-brand-700 px-2.5 py-1 rounded-full">
-                  Status: {statusFilter.replace('_', ' ')}
-                  <button onClick={() => setStatusFilter('')} className="hover:text-brand-900 ml-0.5">&times;</button>
-                </span>
-              )}
-              <button
-                onClick={() => { setSearch(''); setStatusFilter(''); }}
-                className="text-xs text-surface-500 hover:text-surface-700 underline"
-              >
-                Clear all
+        {/* Full-page skeleton on initial load */}
+        {isInitialLoad && isLoading ? (
+          <DashboardSkeleton />
+        ) : (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 animate-fade-in">
+            {/* Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+              <div>
+                <h1 className="text-2xl font-bold text-surface-900">My Tasks</h1>
+                <p className="text-surface-500 text-sm mt-1">
+                  {hasError
+                    ? 'Having trouble loading your tasks'
+                    : `${meta.total} task${meta.total !== 1 ? 's' : ''} total`}
+                </p>
+              </div>
+              <button onClick={openCreate} className="btn-primary flex items-center gap-2">
+                <Plus className="h-4 w-4" />
+                New Task
               </button>
             </div>
-          )}
 
-          {/* Task List */}
-          {isLoading ? (
-            <div className="flex flex-col items-center justify-center py-20 gap-3">
-              <Loader2 className="h-8 w-8 animate-spin text-brand-600" />
-              <p className="text-sm text-surface-500">Loading your tasks...</p>
-            </div>
-          ) : tasks.length === 0 ? (
-            <div className="text-center py-20">
-              <div className="h-16 w-16 rounded-full bg-surface-100 flex items-center justify-center mx-auto mb-4">
-                <ListTodo className="h-8 w-8 text-surface-400" />
-              </div>
-              <h3 className="text-lg font-semibold text-surface-700">
-                {debouncedSearch || statusFilter ? 'No matching tasks' : 'No tasks yet'}
-              </h3>
-              <p className="text-surface-500 mt-1 max-w-sm mx-auto">
-                {debouncedSearch || statusFilter
-                  ? 'Try adjusting your search or filters to find what you\'re looking for.'
-                  : 'Create your first task to start organizing your work.'}
-              </p>
-              {!debouncedSearch && !statusFilter && (
-                <button onClick={openCreate} className="btn-primary mt-6 inline-flex items-center gap-2">
-                  <Plus className="h-4 w-4" />
-                  Create First Task
-                </button>
-              )}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {tasks.map((task) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  isToggling={togglingIds.has(task.id)}
-                  onToggle={handleToggleStatus}
-                  onEdit={openEdit}
-                  onDelete={(id) => {
-                    const t = tasks.find((t) => t.id === id);
-                    if (t) setDeletingTask(t);
-                  }}
+            {/* Status summary cards */}
+            {!hasError && (
+              <div className="mb-8">
+                <StatusSummary
+                  tasks={tasks}
+                  total={meta.total}
+                  activeFilter={statusFilter}
+                  onFilterChange={handleFilterChange}
                 />
-              ))}
-            </div>
-          )}
+              </div>
+            )}
 
-          {/* Pagination */}
-          <Pagination
-            page={meta.page}
-            totalPages={meta.totalPages}
-            total={meta.total}
-            limit={meta.limit}
-            onPageChange={setPage}
-          />
-        </div>
+            {/* Search & Filter */}
+            <div className="flex flex-col sm:flex-row gap-3 mb-6">
+              <SearchBar value={search} onChange={setSearch} />
+              <FilterDropdown value={statusFilter} onChange={handleFilterChange} />
+            </div>
+
+            {/* Active filter pills */}
+            {hasActiveFilters && (
+              <div className="flex items-center gap-2 mb-4 flex-wrap">
+                <span className="text-xs text-surface-500">Active filters:</span>
+                {debouncedSearch && (
+                  <span className="inline-flex items-center gap-1 text-xs bg-brand-50 text-brand-700 px-2.5 py-1 rounded-full">
+                    Search: &quot;{debouncedSearch}&quot;
+                    <button onClick={() => setSearch('')} className="hover:text-brand-900 ml-0.5">&times;</button>
+                  </span>
+                )}
+                {statusFilter && (
+                  <span className="inline-flex items-center gap-1 text-xs bg-brand-50 text-brand-700 px-2.5 py-1 rounded-full">
+                    Status: {statusFilter.replace('_', ' ')}
+                    <button onClick={() => setStatusFilter('')} className="hover:text-brand-900 ml-0.5">&times;</button>
+                  </span>
+                )}
+                <button
+                  onClick={() => { setSearch(''); setStatusFilter(''); }}
+                  className="text-xs text-surface-500 hover:text-surface-700 underline"
+                >
+                  Clear all
+                </button>
+              </div>
+            )}
+
+            {/* Content area */}
+            {hasError ? (
+              <ErrorState
+                title="Couldn't load your tasks"
+                message="There was a problem connecting to the server. Please check your internet connection and try again."
+                variant="network"
+                onRetry={fetchTasks}
+              />
+            ) : isLoading && !isInitialLoad ? (
+              // Subsequent load — show skeletons in place of tasks
+              <TaskListSkeleton count={Math.min(tasks.length || 3, 5)} />
+            ) : tasks.length === 0 && hasActiveFilters ? (
+              <EmptyState
+                icon={SearchX}
+                title="No matching tasks"
+                description="Try adjusting your search or filters to find what you're looking for."
+                action={{
+                  label: 'Clear Filters',
+                  onClick: () => { setSearch(''); setStatusFilter(''); },
+                }}
+              />
+            ) : tasks.length === 0 ? (
+              <EmptyState
+                icon={ListTodo}
+                title="No tasks yet"
+                description="Create your first task to start organizing your work. It only takes a few seconds."
+                action={{
+                  label: 'Create First Task',
+                  onClick: openCreate,
+                  icon: Plus,
+                }}
+              />
+            ) : (
+              <div className="space-y-3 animate-fade-in">
+                {tasks.map((task) => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    isToggling={togglingIds.has(task.id)}
+                    onToggle={handleToggleStatus}
+                    onEdit={openEdit}
+                    onDelete={(id) => {
+                      const t = tasks.find((t) => t.id === id);
+                      if (t) setDeletingTask(t);
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Pagination */}
+            {!hasError && !isLoading && (
+              <Pagination
+                page={meta.page}
+                totalPages={meta.totalPages}
+                total={meta.total}
+                limit={meta.limit}
+                onPageChange={setPage}
+              />
+            )}
+          </div>
+        )}
 
         {/* Modals */}
         {showCreateModal && (
