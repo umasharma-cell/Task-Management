@@ -11,25 +11,30 @@ import { Pagination } from '@/components/tasks/Pagination';
 import { TaskFormModal } from '@/components/tasks/TaskFormModal';
 import { DeleteConfirmModal } from '@/components/tasks/DeleteConfirmModal';
 import { taskApi } from '@/lib/task-api';
-import { Task, TaskPriority } from '@/types';
+import { Task, TaskPriority, TaskStatus } from '@/types';
 import { Plus, Loader2, ListTodo } from 'lucide-react';
 import toast from 'react-hot-toast';
 
+const NEXT_STATUS: Record<TaskStatus, TaskStatus> = {
+  PENDING: 'IN_PROGRESS',
+  IN_PROGRESS: 'COMPLETED',
+  COMPLETED: 'PENDING',
+};
+
 export default function DashboardPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [allPageTasks, setAllPageTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [page, setPage] = useState(1);
   const [meta, setMeta] = useState({ page: 1, limit: 10, total: 0, totalPages: 0 });
+  const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
+  const [deletingTask, setDeletingTask] = useState<Task | null>(null);
 
-  // Debounce search input
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearch(search);
@@ -47,7 +52,6 @@ export default function DashboardPage() {
 
       const response = await taskApi.getAll(params);
       setTasks(response.data || []);
-      setAllPageTasks(response.data || []);
       if (response.meta) setMeta(response.meta);
     } catch {
       toast.error('Failed to load tasks');
@@ -60,22 +64,45 @@ export default function DashboardPage() {
     fetchTasks();
   }, [fetchTasks]);
 
+  // Optimistic toggle with rollback
   const handleToggleStatus = async (taskId: string) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task || togglingIds.has(taskId)) return;
+
+    const previousStatus = task.status;
+    const optimisticStatus = NEXT_STATUS[previousStatus];
+
+    // Optimistic update
+    setTogglingIds((prev) => new Set(prev).add(taskId));
+    setTasks((prev) =>
+      prev.map((t) => (t.id === taskId ? { ...t, status: optimisticStatus } : t))
+    );
+
     try {
       const response = await taskApi.toggleStatus(taskId);
       setTasks((prev) => prev.map((t) => (t.id === taskId ? response.data! : t)));
-      toast.success('Status updated');
+      toast.success(`Moved to ${NEXT_STATUS[previousStatus].replace('_', ' ').toLowerCase()}`);
     } catch {
+      // Rollback
+      setTasks((prev) =>
+        prev.map((t) => (t.id === taskId ? { ...t, status: previousStatus } : t))
+      );
       toast.error('Failed to update status');
+    } finally {
+      setTogglingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
     }
   };
 
   const handleDelete = async () => {
-    if (!deletingTaskId) return;
+    if (!deletingTask) return;
     try {
-      await taskApi.delete(deletingTaskId);
-      setTasks((prev) => prev.filter((t) => t.id !== deletingTaskId));
-      setDeletingTaskId(null);
+      await taskApi.delete(deletingTask.id);
+      setTasks((prev) => prev.filter((t) => t.id !== deletingTask.id));
+      setDeletingTask(null);
       toast.success('Task deleted');
       if (tasks.length === 1 && page > 1) {
         setPage(page - 1);
@@ -87,7 +114,13 @@ export default function DashboardPage() {
     }
   };
 
-  const handleCreateOrUpdate = async (data: { title: string; description: string; priority: TaskPriority; dueDate: string }) => {
+  const handleCreateOrUpdate = async (data: {
+    title: string;
+    description: string;
+    priority: TaskPriority;
+    dueDate: string;
+    status?: TaskStatus;
+  }) => {
     try {
       if (editingTask) {
         const response = await taskApi.update(editingTask.id, {
@@ -95,6 +128,7 @@ export default function DashboardPage() {
           description: data.description || undefined,
           priority: data.priority,
           dueDate: data.dueDate || undefined,
+          ...(data.status ? { status: data.status } : {}),
         });
         setTasks((prev) => prev.map((t) => (t.id === editingTask.id ? response.data! : t)));
         toast.success('Task updated');
@@ -154,20 +188,20 @@ export default function DashboardPage() {
           {/* Status summary cards */}
           <div className="mb-8">
             <StatusSummary
-              tasks={allPageTasks}
+              tasks={tasks}
               total={meta.total}
               activeFilter={statusFilter}
               onFilterChange={handleFilterChange}
             />
           </div>
 
-          {/* Search & Filter bar */}
+          {/* Search & Filter */}
           <div className="flex flex-col sm:flex-row gap-3 mb-6">
             <SearchBar value={search} onChange={setSearch} />
             <FilterDropdown value={statusFilter} onChange={handleFilterChange} />
           </div>
 
-          {/* Active filters indicator */}
+          {/* Active filter pills */}
           {(debouncedSearch || statusFilter) && (
             <div className="flex items-center gap-2 mb-4 flex-wrap">
               <span className="text-xs text-surface-500">Active filters:</span>
@@ -224,9 +258,13 @@ export default function DashboardPage() {
                 <TaskCard
                   key={task.id}
                   task={task}
+                  isToggling={togglingIds.has(task.id)}
                   onToggle={handleToggleStatus}
                   onEdit={openEdit}
-                  onDelete={setDeletingTaskId}
+                  onDelete={(id) => {
+                    const t = tasks.find((t) => t.id === id);
+                    if (t) setDeletingTask(t);
+                  }}
                 />
               ))}
             </div>
@@ -251,10 +289,11 @@ export default function DashboardPage() {
           />
         )}
 
-        {deletingTaskId && (
+        {deletingTask && (
           <DeleteConfirmModal
+            taskTitle={deletingTask.title}
             onConfirm={handleDelete}
-            onCancel={() => setDeletingTaskId(null)}
+            onCancel={() => setDeletingTask(null)}
           />
         )}
       </div>
